@@ -253,6 +253,8 @@ type TableInfo struct {
 	// enabled and the primary key is not a single integer column.
 	IsCommonHandle bool `json:"is_common_handle"`
 
+	IsNewPartition bool `json:"is_new_partition"`
+
 	Comment         string `json:"comment"`
 	AutoIncID       int64  `json:"auto_inc_id"`
 	AutoIdCache     int64  `json:"auto_id_cache"`
