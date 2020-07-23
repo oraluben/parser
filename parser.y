@@ -4727,6 +4727,10 @@ IfNotExists:
 	{
 		$$ = true
 	}
+|	"IF" not2 "EXISTS"
+	{
+		$$ = true
+	}
 
 IgnoreOptional:
 	{
