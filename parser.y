@@ -2496,6 +2496,10 @@ EnforcedOrNot:
 	{
 		$$ = false
 	}
+|	not2 "ENFORCED"
+	{
+		$$ = false
+	}
 
 EnforcedOrNotOpt:
 	%prec lowerThanNot
@@ -2512,6 +2516,10 @@ EnforcedOrNotOrNotNullOpt:
 	{
 		$$ = 0
 	}
+| not2 "NULL"
+	{
+		$$ = 0
+	}
 |	EnforcedOrNotOpt
 	{
 		if $1.(bool) {
@@ -2523,6 +2531,10 @@ EnforcedOrNotOrNotNullOpt:
 
 ColumnOption:
 	"NOT" "NULL"
+	{
+		$$ = &ast.ColumnOption{Tp: ast.ColumnOptionNotNull}
+	}
+|   not2 "NULL"
 	{
 		$$ = &ast.ColumnOption{Tp: ast.ColumnOptionNotNull}
 	}
@@ -4513,6 +4525,10 @@ BetweenOrNotOp:
 	{
 		$$ = false
 	}
+|	not2 "BETWEEN"
+	{
+		$$ = false
+	}
 
 IsOrNotOp:
 	"IS"
@@ -4520,6 +4536,10 @@ IsOrNotOp:
 		$$ = true
 	}
 |	"IS" "NOT"
+	{
+		$$ = false
+	}
+|	"IS" not2
 	{
 		$$ = false
 	}
@@ -4533,6 +4553,10 @@ InOrNotOp:
 	{
 		$$ = false
 	}
+|	not2 "IN"
+	{
+		$$ = false
+	}
 
 LikeOrNotOp:
 	"LIKE"
@@ -4543,6 +4567,10 @@ LikeOrNotOp:
 	{
 		$$ = false
 	}
+|	not2 "LIKE"
+	{
+		$$ = false
+	}
 
 RegexpOrNotOp:
 	RegexpSym
@@ -4550,6 +4578,10 @@ RegexpOrNotOp:
 		$$ = true
 	}
 |	"NOT" RegexpSym
+	{
+		$$ = false
+	}
+|	not2 RegexpSym
 	{
 		$$ = false
 	}
