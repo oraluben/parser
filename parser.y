@@ -127,6 +127,7 @@ import (
 	explain           "EXPLAIN"
 	except            "EXCEPT"
 	falseKwd          "FALSE"
+	fetch             "FETCH"
 	firstValue        "FIRST_VALUE"
 	floatType         "FLOAT"
 	forKwd            "FOR"
@@ -392,6 +393,7 @@ import (
 	global                "GLOBAL"
 	grants                "GRANTS"
 	hash                  "HASH"
+	histogram             "HISTOGRAM"
 	history               "HISTORY"
 	hosts                 "HOSTS"
 	hour                  "HOUR"
@@ -909,6 +911,7 @@ import (
 	ExpressionList                         "expression list"
 	MaxValueOrExpressionList               "maxvalue or expression list"
 	ExpressionListOpt                      "expression list opt"
+	FetchFirstOpt                          "Fetch First/Next Option"
 	FuncDatetimePrecListOpt                "Function datetime precision list opt"
 	FuncDatetimePrecList                   "Function datetime precision list"
 	Field                                  "field expression"
@@ -1227,6 +1230,8 @@ import (
 	FieldsOrColumns   "Fields or columns"
 	StorageMedia      "{DISK|MEMORY|DEFAULT}"
 	EncryptionOpt     "Encryption option 'Y' or 'N'"
+	FirstOrNext       "FIRST or NEXT"
+	RowOrRows         "ROW or ROWS"
 
 %type	<ident>
 	ODBCDateTimeType                "ODBC type keywords for date and time literals"
@@ -2361,6 +2366,23 @@ AnalyzeTableStmt:
 			IndexFlag:      true,
 			Incremental:    true,
 			AnalyzeOpts:    $9.([]ast.AnalyzeOpt),
+		}
+	}
+|	"ANALYZE" "TABLE" TableName "UPDATE" "HISTOGRAM" "ON" ColumnNameList AnalyzeOptionListOpt
+	{
+		$$ = &ast.AnalyzeTableStmt{
+			TableNames:         []*ast.TableName{$3.(*ast.TableName)},
+			ColumnNames:        $7.([]*ast.ColumnName),
+			AnalyzeOpts:        $8.([]ast.AnalyzeOpt),
+			HistogramOperation: ast.HistogramOperationUpdate,
+		}
+	}
+|	"ANALYZE" "TABLE" TableName "DROP" "HISTOGRAM" "ON" ColumnNameList
+	{
+		$$ = &ast.AnalyzeTableStmt{
+			TableNames:         []*ast.TableName{$3.(*ast.TableName)},
+			ColumnNames:        $7.([]*ast.ColumnName),
+			HistogramOperation: ast.HistogramOperationDrop,
 		}
 	}
 
@@ -5278,6 +5300,7 @@ UnReservedKeyword:
 |	"TRADITIONAL"
 |	"SQL_BUFFER_RESULT"
 |	"DIRECTORY"
+|	"HISTOGRAM"
 |	"HISTORY"
 |	"LIST"
 |	"NODEGROUP"
@@ -5960,6 +5983,7 @@ SimpleExpr:
 		x := types.NewFieldType(mysql.TypeString)
 		x.Charset = charset.CharsetBin
 		x.Collate = charset.CharsetBin
+		x.Flag |= mysql.BinaryFlag
 		$$ = &ast.FuncCastExpr{
 			Expr:         $2,
 			Tp:           x,
@@ -5977,10 +6001,13 @@ SimpleExpr:
 		if tp.Decimal == types.UnspecifiedLength {
 			tp.Decimal = defaultDecimal
 		}
+		explicitCharset := parser.explicitCharset
+		parser.explicitCharset = false
 		$$ = &ast.FuncCastExpr{
-			Expr:         $3,
-			Tp:           tp,
-			FunctionType: ast.CastFunction,
+			Expr:            $3,
+			Tp:              tp,
+			FunctionType:    ast.CastFunction,
+			ExplicitCharSet: explicitCharset,
 		}
 	}
 |	"CASE" ExpressionOpt WhenClauseList ElseOpt "END"
@@ -6005,10 +6032,13 @@ SimpleExpr:
 		if tp.Decimal == types.UnspecifiedLength {
 			tp.Decimal = defaultDecimal
 		}
+		explicitCharset := parser.explicitCharset
+		parser.explicitCharset = false
 		$$ = &ast.FuncCastExpr{
-			Expr:         $3,
-			Tp:           tp,
-			FunctionType: ast.CastConvertFunction,
+			Expr:            $3,
+			Tp:              tp,
+			FunctionType:    ast.CastConvertFunction,
+			ExplicitCharSet: explicitCharset,
 		}
 	}
 |	"CONVERT" '(' Expression "USING" CharsetName ')'
@@ -6833,10 +6863,19 @@ CastType:
 		x.Charset = $3.(*ast.OptBinary).Charset
 		if $3.(*ast.OptBinary).IsBinary {
 			x.Flag |= mysql.BinaryFlag
-		}
-		if x.Charset == "" {
-			x.Charset = mysql.DefaultCharset
-			x.Collate = mysql.DefaultCollationName
+			x.Charset = charset.CharsetBin
+			x.Collate = charset.CollationBin
+		} else if x.Charset != "" {
+			co, err := charset.GetDefaultCollation(x.Charset)
+			if err != nil {
+				yylex.AppendError(yylex.Errorf("Get collation error for charset: %s", x.Charset))
+				return 1
+			}
+			x.Collate = co
+			parser.explicitCharset = true
+		} else {
+			x.Charset = parser.charset
+			x.Collate = parser.collation
 		}
 		$$ = x
 	}
@@ -7809,6 +7848,20 @@ LimitOption:
 		$$ = ast.NewParamMarkerExpr(yyS[yypt].offset)
 	}
 
+RowOrRows:
+	"ROW"
+|	"ROWS"
+
+FirstOrNext:
+	"FIRST"
+|	"NEXT"
+
+FetchFirstOpt:
+	{
+		$$ = ast.NewValueExpr(uint64(1), parser.charset, parser.collation)
+	}
+|	LimitOption
+
 SelectStmtLimit:
 	{
 		$$ = nil
@@ -7824,6 +7877,10 @@ SelectStmtLimit:
 |	"LIMIT" LimitOption "OFFSET" LimitOption
 	{
 		$$ = &ast.Limit{Offset: $4.(ast.ExprNode), Count: $2.(ast.ExprNode)}
+	}
+|	"FETCH" FirstOrNext FetchFirstOpt RowOrRows "ONLY"
+	{
+		$$ = &ast.Limit{Count: $3.(ast.ExprNode)}
 	}
 
 SelectStmtOpts:
@@ -10130,9 +10187,10 @@ StringType:
 		x := types.NewFieldType(mysql.TypeEnum)
 		x.Elems = $3.([]string)
 		fieldLen := -1 // enum_flen = max(ele_flen)
-		for _, e := range x.Elems {
-			if len(e) > fieldLen {
-				fieldLen = len(e)
+		for i := range x.Elems {
+			x.Elems[i] = strings.TrimRight(x.Elems[i], " ")
+			if len(x.Elems[i]) > fieldLen {
+				fieldLen = len(x.Elems[i])
 			}
 		}
 		x.Flen = fieldLen
@@ -10148,8 +10206,9 @@ StringType:
 		x := types.NewFieldType(mysql.TypeSet)
 		x.Elems = $3.([]string)
 		fieldLen := len(x.Elems) - 1 // set_flen = sum(ele_flen) + number_of_ele - 1
-		for _, e := range x.Elems {
-			fieldLen += len(e)
+		for i := range x.Elems {
+			x.Elems[i] = strings.TrimRight(x.Elems[i], " ")
+			fieldLen += len(x.Elems[i])
 		}
 		x.Flen = fieldLen
 		opt := $5.(*ast.OptBinary)
